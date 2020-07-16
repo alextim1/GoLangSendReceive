@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package transport;
+
+service Sender {
+    rpc Send(CarrierDto) returns (Empthy) {}
+}
+
+message Empthy {
+}
+
+message CarrierDto {
+    int64 fibNumber = 1;
+}
