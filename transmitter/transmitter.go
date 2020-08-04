@@ -1,6 +1,13 @@
-// transmitter
-// transmitter works as a Client. Tx sends generated message by RPC to the
-// Server side (Receiver)
+// Transmitter.
+//
+// 	Sample of the program which implements a Fibonacci numbers generator
+// 	with preset frequency and send generated numbers to the Receiver side.
+//
+// 	Transmitter implements a Pipeline: Generator -> Retriever -> main (Send message).
+// 	Transmitter works as a Client side which sends generated message by RPC to the
+// 	Server side (Receiver).
+// 	RPC has been implemented by using ProtoBuf protocol.
+//
 package main
 
 import (
@@ -13,64 +20,73 @@ import (
 	tr "transport"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/grpclog"
 )
 
+// Connection parameters.
 const (
-	HOST            = "127.0.0.1"
-	PORT            = "9090"
-	VALUESPERSECOND = 3
+	HOST = "127.0.0.1"
+	PORT = "9090"
 )
 
-// Pipeline : Generator -> Retriever -> main (Send message)
+// Parameter of creating messages frequency times per second.
+const (
+	ValuesPerSecond = 3
+)
+
+// Error raised when return value of function exceeds MaxInt64.
+var (
+	IntegerExceeding error = errors.New("integer overflow")
+)
 
 func main() {
 
-	// non Blocking channel
+	// Nonblocking channel which can contain all generated numbers before sending.
 	messenger := make(chan tr.CarrierDto, math.MaxInt8)
 
 	forSending := make(chan tr.CarrierDto)
 
-	//Generator
+	// Generator.
+	// Generates Fibonacci numbers for further sending.
 	go func(messageCh chan tr.CarrierDto) {
 		prevPrev := tr.CarrierDto{FibNumber: 0}
 		prev := tr.CarrierDto{FibNumber: 1}
 		messageCh <- prevPrev
 		messageCh <- prev
+		closeReceiver := tr.CarrierDto{FibNumber: -1}
+
+		defer fmt.Println("finish")
 
 		var err error
 
 		for err == nil {
 			var buffer int64
-			buffer, err = Summator(prevPrev.FibNumber, prev.FibNumber)
+			buffer, err = Adder(prevPrev.FibNumber, prev.FibNumber)
 			prevPrev.FibNumber = prev.FibNumber
 			prev.FibNumber = buffer
 			messageCh <- prev
 		}
-
-		fmt.Println("finish")
-		closeReceiver := tr.CarrierDto{FibNumber: -1}
 		messageCh <- closeReceiver
-		fmt.Println("finish")
 
 	}(messenger)
 
-	//Retriever with asssigned speed for data stream
+	// Retriever. Retriever retrieves Fibonacci numbers with predefined speed for data stream.
 	go func(inputCh chan tr.CarrierDto, outputCh chan tr.CarrierDto) {
 		message := <-inputCh
+		closeReceiver := tr.CarrierDto{FibNumber: -1}
+
+		defer fmt.Println("exit retriever")
+
 		for message.FibNumber != -1 {
 			outputCh <- message
-			time.Sleep(time.Second / VALUESPERSECOND)
+			time.Sleep(time.Second / ValuesPerSecond)
 			message = <-inputCh
 		}
 
-		closeReceiver := tr.CarrierDto{FibNumber: -1}
 		outputCh <- closeReceiver
 
-		fmt.Println("exit retriever")
 	}(messenger, forSending)
 
-	//main part - sending
+	// Main part - sending messages to Receiver side.
 	opts := []grpc.DialOption{
 		grpc.WithInsecure(),
 	}
@@ -78,7 +94,7 @@ func main() {
 	conn, err := grpc.Dial(HOST+":"+PORT, opts...)
 
 	if err != nil {
-		grpclog.Fatalf("fail to dial: %v", err)
+		fmt.Println("fail to dial: %v", err)
 	}
 
 	defer conn.Close()
@@ -90,24 +106,25 @@ func main() {
 		_, err := client.Send(context.Background(), &message)
 
 		if err != nil {
-			grpclog.Fatalf("fail to dial: %v", err)
+			fmt.Println("fail to dial: %v", err)
 		}
 		message = <-forSending
 		fmt.Println(message.FibNumber)
 	}
 
 	closeReceiver := tr.CarrierDto{FibNumber: -1}
-	_, _ = client.Send(context.Background(), &closeReceiver)
+
 	_, _ = client.Send(context.Background(), &closeReceiver)
 
 	fmt.Println("exit App")
 	return
 }
 
-func Summator(arg1 int64, arg2 int64) (int64, error) {
+// Adder function implements safety adding int64 numbers until
+// the result does not exceed MaxInt64 value.
+func Adder(arg1 int64, arg2 int64) (int64, error) {
 	if arg1 > math.MaxInt64-arg2 {
-		return 0, errors.New("integer overflow")
-	} else {
-		return arg1 + arg2, nil
+		return 0, IntegerExceeding
 	}
+	return arg1 + arg2, nil
 }
